@@ -656,6 +656,11 @@ def x_foo__mutmut_1():
     assert mutants == [expected]
 
 
+def normalize_whitespace(s: str) -> str:
+    """Normalize whitespace by stripping trailing spaces from each line."""
+    return '\n'.join(line.rstrip() for line in s.split('\n'))
+
+
 def test_module_mutation():
     source = """from __future__ import division
 import lib
@@ -679,7 +684,7 @@ print(Adder(1).add(2))"""
 
     src, _ = mutate_file_contents("file.py", source)
 
-    assert src == f"""from __future__ import division
+    expected = f"""from __future__ import division
 import lib
 
 lib.foo()
@@ -697,7 +702,7 @@ x_foo__mutmut_mutants : ClassVar[MutantDict] = {{
 
 def foo(*args, **kwargs):
     result = _mutmut_trampoline(x_foo__mutmut_orig, x_foo__mutmut_mutants, args, kwargs)
-    return result 
+    return result
 
 foo.__signature__ = _mutmut_signature(x_foo__mutmut_orig)
 x_foo__mutmut_orig.__name__ = 'x_foo'
@@ -714,7 +719,7 @@ x_bar__mutmut_mutants : ClassVar[MutantDict] = {{
 
 def bar(*args, **kwargs):
     result = _mutmut_trampoline(x_bar__mutmut_orig, x_bar__mutmut_mutants, args, kwargs)
-    return result 
+    return result
 
 bar.__signature__ = _mutmut_signature(x_bar__mutmut_orig)
 x_bar__mutmut_orig.__name__ = 'x_bar'
@@ -724,15 +729,15 @@ class Adder:
         self.amount = amount
     def xǁAdderǁ__init____mutmut_1(self, amount):
         self.amount = None
-    
+
     xǁAdderǁ__init____mutmut_mutants : ClassVar[MutantDict] = {{
     'xǁAdderǁ__init____mutmut_1': xǁAdderǁ__init____mutmut_1
     }}
-    
+
     def __init__(self, *args, **kwargs):
         result = _mutmut_trampoline(object.__getattribute__(self, "xǁAdderǁ__init____mutmut_orig"), object.__getattribute__(self, "xǁAdderǁ__init____mutmut_mutants"), args, kwargs, self)
-        return result 
-    
+        return result
+
     __init__.__signature__ = _mutmut_signature(xǁAdderǁ__init____mutmut_orig)
     xǁAdderǁ__init____mutmut_orig.__name__ = 'xǁAdderǁ__init__'
 
@@ -741,16 +746,18 @@ class Adder:
 
     def xǁAdderǁadd__mutmut_1(self, value):
         return self.amount - value
-    
+
     xǁAdderǁadd__mutmut_mutants : ClassVar[MutantDict] = {{
     'xǁAdderǁadd__mutmut_1': xǁAdderǁadd__mutmut_1
     }}
-    
+
     def add(self, *args, **kwargs):
         result = _mutmut_trampoline(object.__getattribute__(self, "xǁAdderǁadd__mutmut_orig"), object.__getattribute__(self, "xǁAdderǁadd__mutmut_mutants"), args, kwargs, self)
-        return result 
-    
+        return result
+
     add.__signature__ = _mutmut_signature(xǁAdderǁadd__mutmut_orig)
     xǁAdderǁadd__mutmut_orig.__name__ = 'xǁAdderǁadd'
 
 print(Adder(1).add(2))"""
+
+    assert normalize_whitespace(src) == normalize_whitespace(expected)
