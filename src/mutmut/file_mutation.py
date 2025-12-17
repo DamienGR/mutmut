@@ -226,15 +226,45 @@ def combine_mutations_to_source(module: cst.Module, mutations: Sequence[Mutation
     mutated_module = module.with_changes(body=result)
     return mutated_module.code, mutation_names
 
+def _contains_yield(node: cst.CSTNode) -> bool:
+    """Recursively check if a node contains a Yield, but don't recurse into nested functions/lambdas."""
+    if isinstance(node, cst.Yield):
+        return True
+    if isinstance(node, (cst.FunctionDef, cst.Lambda)):
+        # Don't recurse into nested functions or lambdas
+        return False
+
+    # Check all children
+    for child in node.children:
+        if _contains_yield(child):
+            return True
+    return False
+
+
+def is_generator_function(function: cst.FunctionDef) -> bool:
+    """Check if a function is a generator (contains yield or yield from).
+
+    Note: This checks for Yield nodes in the function body, but doesn't
+    recurse into nested functions or lambdas since Yield in those would
+    make them generators, not the outer function.
+    """
+    return _contains_yield(function.body)
+
+
 def function_trampoline_arrangement(function: cst.FunctionDef, mutants: Iterable[Mutation], class_name: Union[str, None]) -> tuple[Sequence[MODULE_STATEMENT], Sequence[str]]:
     """Create mutated functions and a trampoline that switches between original and mutated versions.
-    
+
     :return: A tuple of (nodes, mutant names)"""
     nodes: list[MODULE_STATEMENT] = []
     mutant_names: list[str] = []
 
     name = function.name.value
     mangled_name = mangle_function_name(name=name, class_name=class_name) + '__mutmut'
+
+    # Detect if the function is async and/or a generator
+    is_async = function.asynchronous is not None
+    is_generator = is_generator_function(function)
+    is_async_generator = is_async and is_generator
 
     # copy of original function
     nodes.append(function.with_changes(name=cst.Name(mangled_name + '_orig')))
@@ -248,7 +278,13 @@ def function_trampoline_arrangement(function: cst.FunctionDef, mutants: Iterable
         nodes.append(mutated_method) # type: ignore
 
     # trampoline that forwards the calls
-    trampoline = list(cst.parse_module(build_trampoline(orig_name=name, mutants=mutant_names, class_name=class_name)).body)
+    trampoline = list(cst.parse_module(build_trampoline(
+        orig_name=name,
+        mutants=mutant_names,
+        class_name=class_name,
+        is_async=is_async,
+        is_async_generator=is_async_generator
+    )).body)
     trampoline[0] = trampoline[0].with_changes(leading_lines=[cst.EmptyLine()])
     nodes.extend(trampoline)
 
