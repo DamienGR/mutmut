@@ -55,7 +55,7 @@ class OuterFunctionProvider(cst.BatchableMetadataProvider):
         def bar():
             x = 1
     ```
-    
+
     Then `self.get_metadata(OuterFunctionProvider, <x>)` returns `<foo>`.
     """
     def __init__(self):
@@ -90,7 +90,7 @@ class OuterFunctionVisitor(cst.CSTVisitor):
 class MutationVisitor(cst.CSTVisitor):
     """Iterate through all nodes in the module and create mutations for them.
     Ignore nodes at lines `ignore_lines` and several other cases (e.g. nodes within type annotations).
-    
+
     The created mutations will be accessible at `self.mutations`."""
 
     METADATA_DEPENDENCIES = (PositionProvider, OuterFunctionProvider)
@@ -146,7 +146,7 @@ class MutationVisitor(cst.CSTVisitor):
         if isinstance(node, cst.Annotation):
             return True
 
-        # default args are executed at definition time 
+        # default args are executed at definition time
         # We want to prevent e.g. def foo(x = abs(-1)) mutating to def foo(x = abs(None)),
         # which would raise an Exception as soon as the function is defined (can break the whole import)
         # Therefore we only allow simple default values, where mutations should not raise exceptions
@@ -173,7 +173,7 @@ trampoline_impl_cst[-1] = trampoline_impl_cst[-1].with_changes(leading_lines = [
 
 def combine_mutations_to_source(module: cst.Module, mutations: Sequence[Mutation]) -> tuple[str, Sequence[str]]:
     """Create mutated functions and trampolines for all mutations and compile them to a single source code.
-    
+
     :param module: The original parsed module
     :param mutations: Mutations that should be applied.
     :return: Mutated code and list of mutation names"""
@@ -226,29 +226,35 @@ def combine_mutations_to_source(module: cst.Module, mutations: Sequence[Mutation
     mutated_module = module.with_changes(body=result)
     return mutated_module.code, mutation_names
 
-def _contains_yield(node: cst.CSTNode) -> bool:
-    """Recursively check if a node contains a Yield, but don't recurse into nested functions/lambdas."""
-    if isinstance(node, cst.Yield):
-        return True
-    if isinstance(node, (cst.FunctionDef, cst.Lambda)):
-        # Don't recurse into nested functions or lambdas
+class YieldFinder(cst.CSTVisitor):
+    """Visitor to detect if a function body contains yield statements."""
+    def __init__(self):
+        self.has_yield = False
+
+    def visit_Yield(self, node: cst.Yield) -> bool:
+        self.has_yield = True
+        return False  # No need to continue
+
+    def visit_YieldFrom(self, node: "cst.Yield") -> bool:
+        self.has_yield = True
         return False
 
-    # Check all children
-    for child in node.children:
-        if _contains_yield(child):
-            return True
-    return False
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        # Don't recurse into nested functions
+        return False
+
+    def visit_Lambda(self, node: cst.Lambda) -> bool:
+        # Don't recurse into lambdas
+        return False
 
 
-def is_generator_function(function: cst.FunctionDef) -> bool:
-    """Check if a function is a generator (contains yield or yield from).
-
-    Note: This checks for Yield nodes in the function body, but doesn't
-    recurse into nested functions or lambdas since Yield in those would
-    make them generators, not the outer function.
-    """
-    return _contains_yield(function.body)
+def _is_async_generator(function: cst.FunctionDef) -> bool:
+    """Check if a function is an async generator (async def with yield)."""
+    if function.asynchronous is None:
+        return False
+    finder = YieldFinder()
+    function.body.visit(finder)
+    return finder.has_yield
 
 
 def function_trampoline_arrangement(function: cst.FunctionDef, mutants: Iterable[Mutation], class_name: Union[str, None]) -> tuple[Sequence[MODULE_STATEMENT], Sequence[str]]:
@@ -261,10 +267,9 @@ def function_trampoline_arrangement(function: cst.FunctionDef, mutants: Iterable
     name = function.name.value
     mangled_name = mangle_function_name(name=name, class_name=class_name) + '__mutmut'
 
-    # Detect if the function is async and/or a generator
+    # Detect if the function is async and/or an async generator
     is_async = function.asynchronous is not None
-    is_generator = is_generator_function(function)
-    is_async_generator = is_async and is_generator
+    is_async_generator = _is_async_generator(function)
 
     # copy of original function
     nodes.append(function.with_changes(name=cst.Name(mangled_name + '_orig')))
@@ -277,7 +282,7 @@ def function_trampoline_arrangement(function: cst.FunctionDef, mutants: Iterable
         mutated_method = deep_replace(mutated_method, mutant.original_node, mutant.mutated_node)
         nodes.append(mutated_method) # type: ignore
 
-    # trampoline that forwards the calls
+    # trampoline that forwards the calls (with async and async generator support)
     trampoline = list(cst.parse_module(build_trampoline(
         orig_name=name,
         mutants=mutant_names,

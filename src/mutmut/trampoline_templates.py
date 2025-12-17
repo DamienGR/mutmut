@@ -12,37 +12,31 @@ def build_trampoline(*, orig_name, mutants, class_name, is_async=False, is_async
         access_suffix = '")'
         self_arg = ', self'
 
-    # Use appropriate trampoline based on function type
+    # Choose the appropriate trampoline based on function type
     if is_async_generator:
-        # Async generators need a wrapper that yields from the original
-        # This ensures asyncio.isasyncgenfunction() returns True
-        return f"""
-{mutants_dict}
-
-async def {orig_name}({'self, ' if class_name is not None else ''}*args, **kwargs):
-    gen = _mutmut_trampoline({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, args, kwargs{self_arg})
-    async for item in gen:
-        yield item
-
-{orig_name}.__signature__ = _mutmut_signature({mangled_name}__mutmut_orig)
-{mangled_name}__mutmut_orig.__name__ = '{mangled_name}'
-"""
+        # Async generator: use async for to yield items
+        trampoline_name = '_mutmut_trampoline_async_generator'
+        async_prefix = 'async '
+        body = f"""async for item in {trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, args, kwargs{self_arg}):
+        yield item"""
     elif is_async:
-        # Regular async functions need async def and should await the result
+        # Regular async function: await the result
         trampoline_name = '_mutmut_trampoline_async'
-        async_keyword = 'async '
-        await_keyword = 'await '
+        async_prefix = 'async '
+        body = f"""result = await {trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, args, kwargs{self_arg})
+    return result"""
     else:
+        # Sync function: direct call
         trampoline_name = '_mutmut_trampoline'
-        async_keyword = ''
-        await_keyword = ''
+        async_prefix = ''
+        body = f"""result = {trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, args, kwargs{self_arg})
+    return result"""
 
     return f"""
 {mutants_dict}
 
-{async_keyword}def {orig_name}({'self, ' if class_name is not None else ''}*args, **kwargs):
-    result = {await_keyword}{trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, args, kwargs{self_arg})
-    return result
+{async_prefix}def {orig_name}({'self, ' if class_name is not None else ''}*args, **kwargs):
+    {body}
 
 {orig_name}.__signature__ = _mutmut_signature({mangled_name}__mutmut_orig)
 {mangled_name}__mutmut_orig.__name__ = '{mangled_name}'
@@ -117,5 +111,33 @@ async def _mutmut_trampoline_async(orig, mutants, call_args, call_kwargs, self_a
     else:
         result = await mutants[mutant_name](*call_args, **call_kwargs)
     return result
+
+
+async def _mutmut_trampoline_async_generator(orig, mutants, call_args, call_kwargs, self_arg = None):
+    \"\"\"Forward call to original or mutated async generator function, depending on the environment\"\"\"
+    import os
+    mutant_under_test = os.environ['MUTANT_UNDER_TEST']
+    if mutant_under_test == 'fail':
+        from mutmut.__main__ import MutmutProgrammaticFailException
+        raise MutmutProgrammaticFailException('Failed programmatically')
+    elif mutant_under_test == 'stats':
+        from mutmut.__main__ import record_trampoline_hit
+        record_trampoline_hit(orig.__module__ + '.' + orig.__name__)
+        async for item in orig(*call_args, **call_kwargs):
+            yield item
+        return
+    prefix = orig.__module__ + '.' + orig.__name__ + '__mutmut_'
+    if not mutant_under_test.startswith(prefix):
+        async for item in orig(*call_args, **call_kwargs):
+            yield item
+        return
+    mutant_name = mutant_under_test.rpartition('.')[-1]
+    if self_arg is not None:
+        # call to a class method where self is not bound
+        async for item in mutants[mutant_name](self_arg, *call_args, **call_kwargs):
+            yield item
+    else:
+        async for item in mutants[mutant_name](*call_args, **call_kwargs):
+            yield item
 
 """
